@@ -4,8 +4,9 @@ const { Resend } = require('resend');
 const app = express();
 const PORT = process.env.PORT || 3001;
 
-// Resend API Key (aus Umgebungsvariable oder hardcoded für lokale Entwicklung)
-const resend = new Resend(process.env.RESEND_API_KEY || 're_YvJh5iKY_Gjva42hZFj8R9QZfm59S4Vsj');
+// API Keys (aus Umgebungsvariablen)
+const resend = new Resend(process.env.RESEND_API_KEY);
+const HUBSPOT_ACCESS_TOKEN = process.env.HUBSPOT_ACCESS_TOKEN;
 
 // E-Mail Empfänger
 const NOTIFY_EMAIL = process.env.NOTIFY_EMAIL || 'dominik.sitny@gmail.com';
@@ -14,6 +15,32 @@ const NOTIFY_EMAIL = process.env.NOTIFY_EMAIL || 'dominik.sitny@gmail.com';
 const HUBSPOT_PORTAL_ID = process.env.HUBSPOT_PORTAL_ID || '147486387';
 
 app.use(express.json());
+
+// Kontaktdaten von HubSpot API holen
+async function getContactDetails(contactId) {
+  try {
+    const response = await fetch(
+      `https://api.hubapi.com/crm/v3/objects/contacts/${contactId}?properties=firstname,lastname,email`,
+      {
+        headers: {
+          'Authorization': `Bearer ${HUBSPOT_ACCESS_TOKEN}`,
+          'Content-Type': 'application/json'
+        }
+      }
+    );
+
+    if (!response.ok) {
+      console.error('HubSpot API Fehler:', response.status);
+      return null;
+    }
+
+    const data = await response.json();
+    return data.properties;
+  } catch (error) {
+    console.error('Fehler beim Abrufen der Kontaktdaten:', error);
+    return null;
+  }
+}
 
 // Webhook Endpoint
 app.post('/webhook', async (req, res) => {
@@ -28,19 +55,27 @@ app.post('/webhook', async (req, res) => {
       const contactId = event.objectId;
       const hubspotLink = `https://app.hubspot.com/contacts/${HUBSPOT_PORTAL_ID}/record/0-1/${contactId}`;
 
+      // Kontaktdaten von HubSpot holen
+      const contact = await getContactDetails(contactId);
+      const firstname = contact?.firstname || 'Unbekannt';
+      const lastname = contact?.lastname || '';
+      const email = contact?.email || 'Keine E-Mail';
+      const fullName = `${firstname} ${lastname}`.trim();
+
       try {
         await resend.emails.send({
           from: 'HubSpot Notification <onboarding@resend.dev>',
           to: NOTIFY_EMAIL,
-          subject: `Neuer Kontakt erstellt (ID: ${contactId})`,
+          subject: `Neuer Kontakt: ${fullName}`,
           html: `
             <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
               <h2 style="color: #ff7a59;">Neuer Kontakt in HubSpot!</h2>
 
               <div style="background: #f5f8fa; padding: 20px; border-radius: 8px; margin: 20px 0;">
-                <p><strong>Kontakt ID:</strong> ${contactId}</p>
-                <p><strong>Erstellt am:</strong> ${new Date(event.occurredAt).toLocaleString('de-DE')}</p>
-                <p><strong>Quelle:</strong> ${event.changeSource || 'Unbekannt'}</p>
+                <p><strong>👤 Name:</strong> ${fullName}</p>
+                <p><strong>📧 E-Mail:</strong> ${email}</p>
+                <p><strong>📅 Erstellt am:</strong> ${new Date(event.occurredAt).toLocaleString('de-DE')}</p>
+                <p><strong>🔗 Quelle:</strong> ${event.changeSource || 'Unbekannt'}</p>
               </div>
 
               <a href="${hubspotLink}"
@@ -54,7 +89,7 @@ app.post('/webhook', async (req, res) => {
             </div>
           `
         });
-        console.log(`E-Mail gesendet für Kontakt ${contactId}`);
+        console.log(`E-Mail gesendet für Kontakt ${contactId} (${fullName})`);
       } catch (error) {
         console.error('Fehler beim E-Mail-Versand:', error);
       }
@@ -72,5 +107,4 @@ app.get('/', (req, res) => {
 
 app.listen(PORT, () => {
   console.log(`Server läuft auf http://localhost:${PORT}`);
-  console.log('Starte ngrok in einem anderen Terminal: ./ngrok http 3001');
 });
